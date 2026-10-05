@@ -13,11 +13,13 @@ type Config struct {
 	// container configuration
 	DebugLevel string
 	// rabbitmq configuration
-	RabbitmqHost     string
-	RabbitmqPort     uint
-	RabbitmqUser     string
-	RabbitmqPassword string
-	RabbitmqVHost    string
+	RabbitmqHost       string
+	RabbitmqPort       uint
+	RabbitmqUser       string
+	RabbitmqPassword   string
+	RabbitmqVHost      string
+	ContainerPrincipal string
+	ContainerAuthToken string
 	// mythic information
 	MythicServerHost     string
 	MythicServerPort     uint
@@ -48,6 +50,8 @@ func init() {
 	mythicEnv.SetDefault("rabbitmq_user", "mythic_user")
 	mythicEnv.SetDefault("rabbitmq_password", "")
 	mythicEnv.SetDefault("rabbitmq_vhost", "mythic_vhost")
+	mythicEnv.SetDefault("mythic_container_principal", "")
+	mythicEnv.SetDefault("mythic_container_auth_token", "")
 	// webhook configuration
 	mythicEnv.SetDefault("webhook_default_url", "")
 	mythicEnv.SetDefault("webhook_default_channel", "")
@@ -86,6 +90,8 @@ func setConfigFromEnv(mythicEnv *viper.Viper) {
 	MythicConfig.RabbitmqUser = mythicEnv.GetString("rabbitmq_user")
 	MythicConfig.RabbitmqPassword = mythicEnv.GetString("rabbitmq_password")
 	MythicConfig.RabbitmqVHost = mythicEnv.GetString("rabbitmq_vhost")
+	MythicConfig.ContainerPrincipal = mythicEnv.GetString("mythic_container_principal")
+	MythicConfig.ContainerAuthToken = mythicEnv.GetString("mythic_container_auth_token")
 	// mythic information
 	MythicConfig.MythicServerPort = mythicEnv.GetUint("mythic_server_port")
 	MythicConfig.MythicServerGRPCPort = mythicEnv.GetUint("mythic_server_grpc_port")

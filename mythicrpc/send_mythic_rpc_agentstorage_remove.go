@@ -8,6 +8,8 @@ import (
 )
 
 type MythicRPCAgentstorageRemoveMessage struct {
+	// OperationID (Required) - operation that owns this entry
+	OperationID int `json:"operation_id"`
 	// UniqueID (Required) - The unique identifier to search for in the database to remove
 	UniqueID string `json:"unique_id"`
 }

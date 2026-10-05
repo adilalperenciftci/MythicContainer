@@ -134,6 +134,7 @@ func processContainerOnStart(inputFunc func(sharedStructs.ContainerOnStartMessag
 	incomingMessage sharedStructs.ContainerOnStartMessage) {
 	responseMsg := inputFunc(incomingMessage)
 	responseMsg.ContainerName = incomingMessage.ContainerName
+	responseMsg.OperationID = incomingMessage.OperationID
 	err := RabbitMQConnection.SendStructMessage(
 		MYTHIC_EXCHANGE,
 		CONTAINER_ON_START_RESPONSE,

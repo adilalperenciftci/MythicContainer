@@ -8,6 +8,8 @@ import (
 )
 
 type MythicRPCAgentstorageCreateMessage struct {
+	// OperationID (Required) - operation that owns this entry
+	OperationID int `json:"operation_id"`
 	// UniqueID (Required) - a unique identifier for this entry provided by you, the dev
 	UniqueID string `json:"unique_id"`
 	// DataToStore (Required) - the data you want to store as bytes
@@ -19,7 +21,6 @@ type MythicRPCAgentstorageCreateMessageResponse struct {
 }
 
 // SendMythicRPCAgentStorageCreate - Create a new entry in the agentstorage table within Mythic.
-// This can be used to store arbitrary data that the agent/c2 profile might need later on and used a way to share data.
 func SendMythicRPCAgentStorageCreate(input MythicRPCAgentstorageCreateMessage) (*MythicRPCAgentstorageCreateMessageResponse, error) {
 	response := MythicRPCAgentstorageCreateMessageResponse{}
 	if responseBytes, err := rabbitmq.RabbitMQConnection.SendRPCStructMessage(

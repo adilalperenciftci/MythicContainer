@@ -102,6 +102,11 @@ func (r *rabbitMQConnection) SendMessage(exchange string, queue string, correlat
 			CorrelationId: correlationId,
 			Body:          body,
 		}
+		msg, err = signedPublishing(queue, body, msg)
+		if err != nil {
+			ch.Close()
+			return err
+		}
 		err = ch.Publish(
 			exchange, // exchange
 			queue,    // routing key
@@ -162,29 +167,29 @@ func (r *rabbitMQConnection) SendRPCMessage(exchange string, queue string, body 
 			time.Sleep(RPC_TIMEOUT)
 			continue
 		}
-		err = ch.ExchangeDeclare(
-			exchange, // exchange name
-			"direct", // type of exchange, ex: topic, fanout, direct, etc
-			true,     // durable
-			true,     // auto-deleted
-			false,    // internal
-			false,    // no-wait
-			nil,      // arguments
-		)
+		correlationID := uuid.NewString()
+		replyRoutingKey, err := containerReplyRoutingKey(correlationID)
 		if err != nil {
-			logging.LogError(err, "Failed to declare exchange", "exchange", exchange, "exchange_type", "direct", "retry_wait_time", RETRY_CONNECT_DELAY)
 			ch.Close()
-			time.Sleep(RPC_TIMEOUT)
-			continue
+			return nil, err
+		}
+		replyQueue, err := ch.QueueDeclare("", false, true, true, false, nil)
+		if err != nil {
+			ch.Close()
+			return nil, err
+		}
+		if err = ch.QueueBind(replyQueue.Name, replyRoutingKey, MYTHIC_RPC_REPLY_EXCHANGE, false, nil); err != nil {
+			ch.Close()
+			return nil, err
 		}
 		msgs, err := ch.Consume(
-			"amq.rabbitmq.reply-to", // queue name
-			"",                      // consumer
-			true,                    // auto-ack
-			exclusiveQueue,          // exclusive
-			false,                   // no local
-			false,                   // no wait
-			nil,                     // args
+			replyQueue.Name, // queue name
+			"",              // consumer
+			true,            // auto-ack
+			exclusiveQueue,  // exclusive
+			false,           // no local
+			false,           // no wait
+			nil,             // args
 		)
 		if err != nil {
 			logging.LogError(err, "Failed to start consuming for RPC replies", "queue", queue)
@@ -196,9 +201,14 @@ func (r *rabbitMQConnection) SendRPCMessage(exchange string, queue string, body 
 		notifyReturnChannel := ch.NotifyReturn(make(chan amqp.Return, 1))
 		msg := amqp.Publishing{
 			ContentType:   "application/json",
-			CorrelationId: uuid.NewString(),
+			CorrelationId: correlationID,
 			Body:          body,
-			ReplyTo:       "amq.rabbitmq.reply-to",
+			ReplyTo:       replyRoutingKey,
+		}
+		msg, err = signedPublishing(queue, body, msg)
+		if err != nil {
+			ch.Close()
+			return nil, err
 		}
 		err = ch.Publish(
 			exchange, // exchange
@@ -265,21 +275,6 @@ func (r *rabbitMQConnection) ReceiveFromMythicDirectExchange(exchange string, qu
 			time.Sleep(RPC_TIMEOUT)
 			continue
 		}
-		err = ch.ExchangeDeclare(
-			exchange, // exchange name
-			"direct", // type of exchange, ex: topic, fanout, direct, etc
-			true,     // durable
-			true,     // auto-deleted
-			false,    // internal
-			false,    // no-wait
-			nil,      // arguments
-		)
-		if err != nil {
-			logging.LogError(err, "Failed to declare exchange", "exchange", exchange, "exchange_type", "direct", "retry_wait_time", RPC_TIMEOUT)
-			ch.Close()
-			time.Sleep(RPC_TIMEOUT)
-			continue
-		}
 		q, err := ch.QueueDeclare(
 			queue,          // name, queue
 			false,          // durable
@@ -325,6 +320,7 @@ func (r *rabbitMQConnection) ReceiveFromMythicDirectExchange(exchange string, qu
 		forever := make(chan bool)
 		go func() {
 			for d := range msgs {
+				rememberRabbitMQAuthContext(d.RoutingKey, d.Headers, d.Body)
 				go handler(d.Body)
 			}
 			forever <- true
@@ -352,21 +348,6 @@ func (r *rabbitMQConnection) ReceiveFromRPCQueue(exchange string, queue string, 
 		ch, err := conn.Channel()
 		if err != nil {
 			logging.LogError(err, "Failed to open rabbitmq channel", "retry_wait_time", RPC_TIMEOUT, "queue", queue)
-			time.Sleep(RPC_TIMEOUT)
-			continue
-		}
-		err = ch.ExchangeDeclare(
-			exchange, // exchange name
-			"direct", // type of exchange, ex: topic, fanout, direct, etc
-			true,     // durable
-			true,     // auto-deleted
-			false,    // internal
-			false,    // no-wait
-			nil,      // arguments
-		)
-		if err != nil {
-			logging.LogError(err, "Failed to declare exchange", "exchange", exchange, "exchange_type", "direct", "retry_wait_time", RPC_TIMEOUT, "queue", queue)
-			ch.Close()
 			time.Sleep(RPC_TIMEOUT)
 			continue
 		}
@@ -414,11 +395,17 @@ func (r *rabbitMQConnection) ReceiveFromRPCQueue(exchange string, queue string, 
 		forever := make(chan bool)
 		go func() {
 			if resumeResponse != nil {
+				replyRoutingKey, routeErr := containerReplyRoutingKey(resumeMessage.CorrelationId)
+				if routeErr != nil {
+					logging.LogError(routeErr, "Failed to create reply routing key")
+					forever <- true
+					return
+				}
 				err = ch.Publish(
-					"",                    // exchange
-					resumeMessage.ReplyTo, //routing key
-					true,                  // mandatory
-					false,                 // immediate
+					MYTHIC_RPC_REPLY_EXCHANGE, // exchange
+					replyRoutingKey,           // routing key
+					true,                      // mandatory
+					false,                     // immediate
 					amqp.Publishing{
 						ContentType:   "application/json",
 						Body:          resumeResponse,
@@ -438,6 +425,7 @@ func (r *rabbitMQConnection) ReceiveFromRPCQueue(exchange string, queue string, 
 			}
 			for d := range msgs {
 				//logging.LogInfo("about to handle rpc msg", "queue", q.Name)
+				rememberRabbitMQAuthContext(d.RoutingKey, d.Headers, d.Body)
 				responseMsg := handler(d.Body)
 				//logging.LogInfo("finished handling rpc msg", "queue", q.Name)
 				responseMsgJson, err := json.Marshal(responseMsg)
@@ -445,11 +433,16 @@ func (r *rabbitMQConnection) ReceiveFromRPCQueue(exchange string, queue string, 
 					logging.LogError(err, "Failed to generate JSON for response")
 					return
 				}
+				replyRoutingKey, routeErr := containerReplyRoutingKey(d.CorrelationId)
+				if routeErr != nil {
+					logging.LogError(routeErr, "Failed to create reply routing key")
+					continue
+				}
 				err = ch.Publish(
-					"",        // exchange
-					d.ReplyTo, //routing key
-					true,      // mandatory
-					false,     // immediate
+					MYTHIC_RPC_REPLY_EXCHANGE, // exchange
+					replyRoutingKey,           // routing key
+					true,                      // mandatory
+					false,                     // immediate
 					amqp.Publishing{
 						ContentType:   "application/json",
 						Body:          responseMsgJson,
@@ -494,20 +487,6 @@ func (r *rabbitMQConnection) CheckConsumerExists(exchange string, queue string, 
 		logging.LogError(err, "Channel could not be put into confirm mode")
 		return false, err
 	}
-	err = ch.ExchangeDeclare(
-		exchange, // exchange name
-		"direct", // type of exchange, ex: topic, fanout, direct, etc
-		true,     // durable
-		true,     // auto-deleted
-		false,    // internal
-		false,    // no-wait
-		nil,      // arguments
-	)
-	if err != nil {
-		logging.LogError(err, "Failed to declare exchange", "exchange", exchange, "exchange_type", "direct", "retry_wait_time", RETRY_CONNECT_DELAY)
-		return false, err
-	}
-
 	if _, err := ch.QueueDeclarePassive(
 		queue,          // name, queue
 		false,          // durable
@@ -540,18 +519,6 @@ func (r *rabbitMQConnection) GetNumberOfConsumersDirectChannels(exchange string,
 	} else if err = ch.Confirm(false); err != nil {
 		logging.LogError(err, "Channel could not be put into confirm mode")
 		return 0, err
-	} else if err = ch.ExchangeDeclare(
-		exchange, // exchange name
-		kind,     // type of exchange, ex: topic, fanout, direct, etc
-		true,     // durable
-		true,     // auto-deleted
-		false,    // internal
-		false,    // no-wait
-		nil,      // arguments
-	); err != nil {
-		logging.LogError(err, "Failed to declare exchange", "exchange", MYTHIC_TOPIC_EXCHANGE, "exchange_type", "topic", "retry_wait_time", RETRY_CONNECT_DELAY)
-		return 0, err
-
 	} else if q, err := ch.QueueDeclare(
 		queue, // name, queue
 		false, // durable
@@ -580,6 +547,11 @@ func (r *rabbitMQConnection) ReceiveFromMythicDirectTopicExchange(exchange strin
 	// queue is where the messages get sent to (local name)
 	// routingKey is the specific direct topic we're interested in for the exchange
 	// handler processes the messages we get on our queue
+	scopedRoutingKey, scopeErr := containerTelemetryRoutingKey(routingKey)
+	if scopeErr != nil {
+		logging.LogError(scopeErr, "Failed to scope topic routing key to container identity", "routing_key", routingKey)
+		return
+	}
 	for {
 		if conn, err := r.GetConnection(); err != nil {
 			logging.LogError(err, "Failed to connect to rabbitmq", "retry_wait_time", RETRY_CONNECT_DELAY)
@@ -587,18 +559,6 @@ func (r *rabbitMQConnection) ReceiveFromMythicDirectTopicExchange(exchange strin
 			continue
 		} else if ch, err := conn.Channel(); err != nil {
 			logging.LogError(err, "Failed to open rabbitmq channel", "retry_wait_time", RETRY_CONNECT_DELAY)
-			time.Sleep(RETRY_CONNECT_DELAY)
-			continue
-		} else if err = ch.ExchangeDeclare(
-			exchange, // exchange name
-			"topic",  // type of exchange, ex: topic, fanout, direct, etc
-			true,     // durable
-			true,     // auto-deleted
-			false,    // internal
-			false,    // no-wait
-			nil,      // arguments
-		); err != nil {
-			logging.LogError(err, "Failed to declare exchange", "exchange", exchange, "exchange_type", "direct", "retry_wait_time", RETRY_CONNECT_DELAY)
 			time.Sleep(RETRY_CONNECT_DELAY)
 			continue
 		} else if q, err := ch.QueueDeclare(
@@ -614,11 +574,11 @@ func (r *rabbitMQConnection) ReceiveFromMythicDirectTopicExchange(exchange strin
 			time.Sleep(RETRY_CONNECT_DELAY)
 			continue
 		} else if err = ch.QueueBind(
-			q.Name,     // queue name
-			routingKey, // routing key
-			exchange,   // exchange name
-			false,      // nowait
-			nil,        // arguments
+			q.Name,           // queue name
+			scopedRoutingKey, // routing key
+			exchange,         // exchange name
+			false,            // nowait
+			nil,              // arguments
 		); err != nil {
 			logging.LogError(err, "Failed to bind to queue to receive messages", "retry_wait_time", RETRY_CONNECT_DELAY)
 			ch.Close()

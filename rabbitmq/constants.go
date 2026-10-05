@@ -1,13 +1,18 @@
 package rabbitmq
 
-import (
-	"fmt"
-	"time"
-)
+import "time"
+
+func rabbitMQExchangeType(exchange string) string {
+	if exchange == MYTHIC_EXCHANGE || exchange == MYTHIC_TOPIC_EXCHANGE || exchange == MYTHIC_RPC_REPLY_EXCHANGE {
+		return "topic"
+	}
+	return "direct"
+}
 
 const (
 	MYTHIC_EXCHANGE                        = "mythic_exchange"
 	MYTHIC_TOPIC_EXCHANGE                  = "mythic_topic_exchange"
+	MYTHIC_RPC_REPLY_EXCHANGE              = "mythic_rpc_reply_exchange"
 	RETRY_CONNECT_DELAY                    = 5 * time.Second
 	TIME_FORMAT_STRING_YYYY_MM_DD          = "2006-01-02"
 	TIME_FORMAT_STRING_YYYY_MM_DD_HH_MM_SS = "2006-01-02 15:04:05 Z07"
@@ -17,10 +22,10 @@ const (
 
 type CallbackPortType = string
 
-const containerVersion = "v1.4.3"
+const containerVersion = "v1.5.0"
 
-var containerVersionMessage = fmt.Sprintf("This version needs Mythic 3.4.8+. This " +
-	"has MythicRPC breaking changes from v1.5.2 and below due to a change in some parameter name changes.")
+const containerVersionMessage = "This version needs Mythic 4.0.0+. This " +
+	"protocol requires authenticated container identities and operation-scoped agentstorage."
 
 const (
 	CALLBACK_PORT_TYPE_SOCKS       CallbackPortType = "socks"

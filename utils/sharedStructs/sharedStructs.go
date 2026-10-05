@@ -19,6 +19,7 @@ type ContainerOnStartMessage struct {
 
 type ContainerOnStartMessageResponse struct {
 	ContainerName         string `json:"container_name"`
+	OperationID           int    `json:"operation_id"`
 	EventLogInfoMessage   string `json:"stdout"`
 	EventLogErrorMessage  string `json:"stderr"`
 	RestartInternalServer bool   `json:"restart_internal_server"`
